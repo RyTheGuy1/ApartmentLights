@@ -1,99 +1,65 @@
 import usb.core
 import usb.util
-import time
-import os
-import requests
 import configparser
+import os
 
-# Morse code dictionary
-MORSE_CODE = {'S': '...', 'O': '---'}
+# Get the directory of the current script (root/src/)
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Function to blink the light in morse code for SOS
-def morse_code_sos(device):
-    for char in "SOS":
-        code = MORSE_CODE[char]
-        for symbol in code:
-            if symbol == '.':
-                blink_light(device, 0.5)  # Short blink for dot
-            elif symbol == '-':
-                blink_light(device, 1.5)  # Long blink for dash
-            time.sleep(0.5)  # Space between parts of the same letter
-        time.sleep(1.5)  # Space between different letters
+# Construct the path to the config file in the root directory (root/light_config.conf)
+config_file = os.path.join(script_dir, '..', 'light_config.conf')
 
-# Function to blink the light
-def blink_light(device, duration):
-    device.ctrl_transfer(0x40, 0x01)  # Example to turn on
-    time.sleep(duration)
-    device.ctrl_transfer(0x40, 0x00)  # Example to turn off
-    time.sleep(duration)
-
-# Function to ping the cloud server
-def ping_server(domain):
-    try:
-        response = requests.get(domain)
-        return response.status_code == 200
-    except requests.exceptions.RequestException:
-        return False
-
-# Function to update the .conf file
-def update_conf_file(config_file, vendor_id, product_id):
-    config = configparser.ConfigParser()
-    config.read(config_file)
-    config.set('DEFAULT', 'LightVendorId', vendor_id)
-    config.set('DEFAULT', 'LightProductId', product_id)
-    
-    with open(config_file, 'w') as configfile:
-        config.write(configfile)
-
-# Load configuration from .conf file
-config_file = 'config.conf'
+# Load the configuration file
 config = configparser.ConfigParser()
-config.read(config_file)
 
-light_vendor_id = config.get('DEFAULT', 'LightVendorId')
-light_product_id = config.get('DEFAULT', 'LightProductId')
-domains = config.get('DEFAULT', 'Domains').split(',')
-ping_interval = int(config.get('DEFAULT', 'PingInterval'))
+# Check if the config file exists
+if os.path.exists(config_file):
+    config.read(config_file)
+else:
+    # If the config file doesn't exist, initialize a default config
+    config['DEFAULT'] = {}
 
-# Find USB device
-device = usb.core.find(idVendor=int(light_vendor_id, 16), idProduct=int(light_product_id, 16))
+# Try to get ProductID from the config file
+light_product_id = config.get('DEFAULT', 'LightProductId', fallback=None)
 
-# If device not found, prompt user to select from list of devices
-if device is None:
-    print("Specified USB device not found.")
-    devices = usb.core.find(find_all=True)
-    
-    for i, dev in enumerate(devices):
-        print(f"{i}: Vendor ID = {hex(dev.idVendor)}, Product ID = {hex(dev.idProduct)}")
+# If ProductID exists in the conf file, skip the selection process
+if light_product_id:
+    print(f"ProductID {light_product_id} already exists in the configuration. Skipping device selection.")
+else:
+    # Find all connected USB devices
+    devices = list(usb.core.find(find_all=True))
 
-    selection = int(input("Select the USB device (number): "))
-    selected_device = list(usb.core.find(find_all=True))[selection]
-    
-    light_vendor_id = hex(selected_device.idVendor)
-    light_product_id = hex(selected_device.idProduct)
-    
-    update_conf_file(config_file, light_vendor_id, light_product_id)
-    device = selected_device
+    # If no USB devices are found
+    if not devices:
+        print("No USB devices found.")
+        exit()
 
-# Detach kernel driver if necessary
-if device.is_kernel_driver_active(0):
-    device.detach_kernel_driver(0)
+    # Display USB devices with index for user to select
+    print("Select the USB device by index:")
+    for index, device in enumerate(devices, start=1):
+        print(f"{index}: VendorID = {hex(device.idVendor)}, ProductID = {hex(device.idProduct)}")
 
-# Set configuration
-device.set_configuration()
+    # Ask user to select a USB device
+    try:
+        selected_index = int(input("Enter the index of the device you want to select: ")) - 1
 
-# Main loop to ping server and control the light
-try:
-    while True:
-        is_online = ping_server(domains[0])  # Using the first domain in the list
-        if is_online:
-            print("Server is online. Keeping light stable.")
-            # Keep USB power stable (no blinking)
-        else:
-            print("Server is offline. Blinking SOS.")
-            morse_code_sos(device)
-        
-        time.sleep(ping_interval)
-except KeyboardInterrupt:
-    usb.util.dispose_resources(device)
-    print("Program stopped.")
+        # Ensure the selected index is valid
+        if selected_index < 0 or selected_index >= len(devices):
+            print("Invalid index. Please run the script again.")
+            exit()
+
+        # Get the selected device's ProductID
+        selected_device = devices[selected_index]
+        selected_product_id = hex(selected_device.idProduct)
+
+        # Update config file with the selected ProductID
+        config.set('DEFAULT', 'LightProductId', selected_product_id)
+
+        # Write changes to the configuration file
+        with open(config_file, 'w') as configfile:
+            config.write(configfile)
+
+        print(f"ProductID {selected_product_id} has been saved to {config_file}.")
+
+    except ValueError:
+        print("Invalid input. Please enter a number corresponding to the device index.")
