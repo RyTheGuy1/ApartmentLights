@@ -1,4 +1,4 @@
-# Apartment Lights
+# 🚨 Apartment Lights 🚨
 
 The controller for the lights in my apartment
 
